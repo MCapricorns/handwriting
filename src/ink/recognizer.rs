@@ -5,6 +5,7 @@ use windows::UI::Input::Inking::{
     InkDrawingAttributes, InkRecognitionTarget, InkRecognizerContainer, InkStrokeBuilder,
     InkStrokeContainer, PenTipShape,
 };
+use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
 use windows_collections::IIterable;
 
 #[derive(Clone, Copy, Debug)]
@@ -100,6 +101,22 @@ impl InkRecognizerService {
 
         Ok(candidates)
     }
+}
+
+pub fn recognize_off_thread(
+    strokes: Vec<Vec<InkPoint>>,
+) -> windows::core::Result<Vec<RecognitionCandidate>> {
+    std::thread::spawn(
+        move || -> windows::core::Result<Vec<RecognitionCandidate>> {
+            unsafe {
+                let _ = RoInitialize(RO_INIT_MULTITHREADED);
+            }
+            let service = InkRecognizerService::new()?;
+            service.recognize(&strokes)
+        },
+    )
+    .join()
+    .map_err(|_| windows::core::Error::from(windows::core::HRESULT(-1)))?
 }
 
 fn select_chinese_recognizer(container: &InkRecognizerContainer) -> windows::core::Result<String> {
