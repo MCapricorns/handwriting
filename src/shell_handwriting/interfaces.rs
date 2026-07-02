@@ -5,7 +5,7 @@ use windows::core::Interface;
 
 windows_core::imp::define_interface!(
     ITfHandwriting,
-    ITfHandwriting_Vtbl,
+    ItfHandwritingVtbl,
     0x59714133_8e20_5101_b1ae_d2cd9bad8ce5
 );
 impl ITfHandwriting {
@@ -41,7 +41,7 @@ impl ITfHandwriting {
 }
 
 #[repr(C)]
-pub struct ITfHandwriting_Vtbl {
+pub struct ItfHandwritingVtbl {
     pub base: windows::core::IUnknown_Vtbl,
     pub GetHandwritingState: unsafe extern "system" fn(
         *mut core::ffi::c_void,
