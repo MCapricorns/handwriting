@@ -16,14 +16,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, EnumChildWindows, GetClassNameW,
-    GetForegroundWindow, GetParent, GetWindowThreadProcessId, IsWindowVisible, SW_SHOW,
-    SendMessageW, SetCursorPos, SetForegroundWindow, ShowWindow, WM_PASTE,
+    GetCursorPos, GetForegroundWindow, GetParent, GetWindowThreadProcessId, IsWindowVisible,
+    SW_SHOW, SendMessageW, SetCursorPos, SetForegroundWindow, ShowWindow, WM_PASTE,
 };
 use windows_core::BOOL;
 
 const E_FAIL: i32 = 0x80004005u32 as i32;
-
-type InjectionStrategy = fn(&TextTarget, HWND, &str) -> windows::core::Result<()>;
 
 pub fn inject_text_target(target: &TextTarget, text: &str) -> windows::core::Result<()> {
     if text.is_empty() {
@@ -33,34 +31,35 @@ pub fn inject_text_target(target: &TextTarget, text: &str) -> windows::core::Res
     let top = top_level_window(target.hwnd);
     try_activate_target_window(top);
 
-    let strategies: &[(&str, InjectionStrategy)] = &[
-        ("standard Edit + SendInput", inject_via_edit_sendinput),
-        ("UIA focus + SendInput", inject_via_uia_sendinput),
-        ("click + clipboard paste", inject_via_click_paste),
-    ];
+    if let Some(edit_hwnd) = find_standard_edit_hwnd(target)
+        && inject_via_edit_sendinput(edit_hwnd, text).is_ok()
+    {
+        info!("injected text via standard Edit + SendInput");
+        return Ok(());
+    }
+    warn!("standard Edit injection failed, trying UIA SendInput");
 
-    for (name, strategy) in strategies {
-        match strategy(target, top, text) {
-            Ok(()) => {
-                info!(strategy = name, "injected text");
-                return Ok(());
-            }
-            Err(e) => warn!(strategy = name, ?e, "injection strategy failed"),
-        }
+    if inject_via_uia_sendinput(target, text).is_ok() {
+        info!("injected text via UIA focus + SendInput");
+        return Ok(());
+    }
+    warn!("UIA SendInput injection failed, trying click + paste");
+
+    if inject_via_click_paste(target, text).is_ok() {
+        info!("injected text via click + clipboard paste");
+        return Ok(());
     }
 
+    warn!("all injection strategies failed");
     Err(windows::core::Error::new(
         windows::core::HRESULT(E_FAIL),
         "all injection strategies failed",
     ))
 }
 
-fn inject_via_edit_sendinput(
-    target: &TextTarget,
-    top: HWND,
-    text: &str,
-) -> windows::core::Result<()> {
-    let edit_hwnd = find_standard_edit_hwnd(target).ok_or_else(windows::core::Error::from_win32)?;
+fn inject_via_edit_sendinput(edit_hwnd: HWND, text: &str) -> windows::core::Result<()> {
+    let top = top_level_window(edit_hwnd);
+    try_activate_target_window(top);
     unsafe {
         let _ = SetFocus(Some(edit_hwnd));
         Sleep(100);
@@ -68,22 +67,44 @@ fn inject_via_edit_sendinput(
     send_unicode_input_to_window(top, text)
 }
 
-fn inject_via_uia_sendinput(
-    target: &TextTarget,
-    top: HWND,
-    text: &str,
-) -> windows::core::Result<()> {
-    focus_target_point(target)?;
+fn inject_via_uia_sendinput(target: &TextTarget, text: &str) -> windows::core::Result<()> {
+    let top = top_level_window(target.hwnd);
+    try_activate_target_window(top);
+
+    let point = focus_point_for_target(target);
+    focus_uia_at_point(point)?;
+    unsafe {
+        Sleep(100);
+    }
+
     send_unicode_input_to_window(top, text)
 }
 
-fn inject_via_click_paste(target: &TextTarget, top: HWND, text: &str) -> windows::core::Result<()> {
-    focus_target_point(target)?;
+fn inject_via_click_paste(target: &TextTarget, text: &str) -> windows::core::Result<()> {
+    let top = top_level_window(target.hwnd);
+    try_activate_target_window(top);
+
+    let point = focus_point_for_target(target);
+    click_screen_point(point)?;
+    unsafe {
+        Sleep(120);
+    }
+    focus_uia_at_point(point)?;
+    unsafe {
+        Sleep(120);
+    }
 
     if !is_foreground(top) {
         warn!(?top, current = ?unsafe { GetForegroundWindow() }, "target not foreground before paste");
         try_activate_target_window(top);
-        focus_target_point(target)?;
+        click_screen_point(point)?;
+        unsafe {
+            Sleep(120);
+        }
+        focus_uia_at_point(point)?;
+        unsafe {
+            Sleep(120);
+        }
     }
 
     set_clipboard_text(text)?;
@@ -98,17 +119,17 @@ fn inject_via_click_paste(target: &TextTarget, top: HWND, text: &str) -> windows
     Ok(())
 }
 
-fn focus_target_point(target: &TextTarget) -> windows::core::Result<()> {
-    let point = center_point(&target.rect);
-    click_screen_point(point)?;
-    unsafe {
-        Sleep(120);
+fn focus_point_for_target(target: &TextTarget) -> POINT {
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&mut cursor) }.is_ok() && point_in_rect(&cursor, &target.rect) {
+        cursor
+    } else {
+        center_point(&target.rect)
     }
-    focus_uia_at_point(point)?;
-    unsafe {
-        Sleep(120);
-    }
-    Ok(())
+}
+
+fn point_in_rect(point: &POINT, rect: &RECT) -> bool {
+    point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom
 }
 
 fn focus_uia_at_point(point: POINT) -> windows::core::Result<()> {
@@ -276,6 +297,10 @@ fn set_clipboard_text(text: &str) -> windows::core::Result<()> {
 }
 
 fn send_ctrl_v_to_window(top: HWND) -> windows::core::Result<()> {
+    if !ensure_foreground(top)? {
+        return Err(windows::core::Error::from_win32());
+    }
+
     let inputs = [
         key_event(VK_CONTROL, false),
         key_event(VK_V, false),
@@ -286,6 +311,10 @@ fn send_ctrl_v_to_window(top: HWND) -> windows::core::Result<()> {
 }
 
 fn send_unicode_input_to_window(top: HWND, text: &str) -> windows::core::Result<()> {
+    if !ensure_foreground(top)? {
+        return Err(windows::core::Error::from_win32());
+    }
+
     for ch in text.chars() {
         let code = ch as u16;
         let inputs = [
@@ -317,6 +346,14 @@ fn send_unicode_input_to_window(top: HWND, text: &str) -> windows::core::Result<
         send_input_to_window(top, &inputs)?;
     }
     Ok(())
+}
+
+fn ensure_foreground(top: HWND) -> windows::core::Result<bool> {
+    if is_foreground(top) {
+        return Ok(true);
+    }
+    try_activate_target_window(top);
+    Ok(is_foreground(top))
 }
 
 fn send_input_to_window(top: HWND, inputs: &[INPUT]) -> windows::core::Result<()> {
