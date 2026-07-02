@@ -22,7 +22,7 @@ pub struct PointerHost {
 
 impl PointerHost {
     pub fn try_start(manager: Rc<RefCell<HandwritingManager>>) -> Option<Self> {
-        if let Err(e) = manager.borrow().enable_pointer_delivery() {
+        if let Err(e) = manager.borrow_mut().enable_pointer_delivery() {
             warn!(?e, "POINTER_DELIVERY denied; pen system panel unavailable");
             return None;
         }

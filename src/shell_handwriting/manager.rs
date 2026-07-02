@@ -42,11 +42,13 @@ impl HandwritingManager {
         Ok(state)
     }
 
-    pub fn enable_pointer_delivery(&self) -> windows::core::Result<()> {
+    pub fn enable_pointer_delivery(&mut self) -> windows::core::Result<()> {
         unsafe {
             self.handwriting
-                .SetHandwritingState(TfHandwritingState::POINTER_DELIVERY)
+                .SetHandwritingState(TfHandwritingState::POINTER_DELIVERY)?;
         }
+        self.saved_state = TfHandwritingState::POINTER_DELIVERY;
+        Ok(())
     }
 
     pub fn request_handwriting_for_pointer(&self, pointer_id: u32) -> windows::core::Result<bool> {

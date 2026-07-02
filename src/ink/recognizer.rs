@@ -145,5 +145,3 @@ fn is_chinese_recognizer(name: &str) -> bool {
         || lower.contains("(china)")
         || lower.contains("(taiwan)")
 }
-
-
