@@ -163,15 +163,9 @@ fn run_custom_session(
     handwriting_manager: Option<&Rc<RefCell<HandwritingManager>>>,
     preset_target: Option<TextTarget>,
 ) -> Result<()> {
-    let text_target = match preset_target {
-        Some(target) => target,
-        None => match pick_text_target() {
-            Some(target) => target,
-            None => {
-                info!("no input box detected; click inside an edit field or hover over it");
-                return Ok(());
-            }
-        },
+    let Some(text_target) = preset_target.or_else(pick_text_target) else {
+        info!("no input box detected; click inside an edit field or hover over it");
+        return Ok(());
     };
 
     info!(hwnd = ?text_target.hwnd, "confirmed text target");
